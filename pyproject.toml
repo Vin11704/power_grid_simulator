@@ -1,0 +1,22 @@
+[project]
+name = "power-grid-simulator"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Vin11704", email = "malvin.ken.s@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "altair[all]>=6.2.2",
+    "pandas>=3.0.5",
+    "pytest>=9.1.1",
+    "streamlit>=1.63.0",
+]
+
+[project.scripts]
+power-grid-simulator = "power_grid_simulator:main"
+
+[build-system]
+requires = ["uv_build>=0.12.3,<0.13.0"]
+build-backend = "uv_build"
