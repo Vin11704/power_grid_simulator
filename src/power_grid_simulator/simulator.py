@@ -16,6 +16,11 @@ The property this guarantees is inductive -- "safe state in, safe state out" --
 not "always safe". Because ``(OFF, OPEN)`` is 0.00 Hz/s, the interlock can
 *halt* an under-frequency decay but cannot reverse one; recovery needs
 generation. See ``tests/test_simulator.py`` for both cases.
+
+It also **latches**: once a limit trips, CB101 stays forced in its safety
+position -- and manual commands stay refused -- until frequency fully
+recovers to ``NOMINAL_FREQ``, not just back inside the safe band. See
+``self._latch`` and ``_required_cb_state``.
 """
 
 # Generator states
@@ -56,10 +61,13 @@ class PowerGridSimulator:
     # -- lifecycle --------------------------------------------------------
 
     def reset(self):
-        """Return to the documented startup state: 50.00 Hz, G101 OFF, CB101 CLOSED."""
+        """Return to the documented startup state: 50.00 Hz, G101 ON, CB101 CLOSED."""
         self.t = 0
         self.frequency = NOMINAL_FREQ
-        self.g101 = OFF
+        self.g101 = ON
+        # Must precede set_cb101() below: _required_cb_state() reads this, and
+        # it would not exist yet on the very first construction otherwise.
+        self._latch = None
         self.running = False
         self.history = []
         # Routed through the setter so it stays the single writer of cb101.
@@ -98,32 +106,62 @@ class PowerGridSimulator:
 
     # -- interlock --------------------------------------------------------
 
-    def _required_cb_state(self, frequency):
-        """What CB101 must be at ``frequency``, or None inside the safe band."""
+    def _hard_limit_state(self, frequency):
+        """The spec-literal threshold check at ``frequency``, ignoring the latch."""
         if frequency <= UNDER_FREQ:
             return OPEN
         if frequency >= OVER_FREQ:
             return CLOSED
         return None
 
+    def _required_cb_state(self, frequency):
+        """CB101 state the interlock requires at ``frequency``, or None if free.
+
+        Once a hard limit trips, ``self._latch`` remembers it, so the
+        requirement persists until frequency fully recovers to
+        ``NOMINAL_FREQ`` -- not just back inside the safe band -- and the
+        interlock (and the button) cannot chatter right at the edge of a
+        limit. Only reads ``self._latch``, never writes it, so this stays a
+        pure query safe to call from `_would_be_reverted` for UI checks and
+        fuzz probing.
+        """
+        hard = self._hard_limit_state(frequency)
+        if hard is not None:
+            return hard
+        if self._latch == OPEN and frequency < NOMINAL_FREQ:
+            return OPEN
+        if self._latch == CLOSED and frequency > NOMINAL_FREQ:
+            return CLOSED
+        return None
+
     def _would_be_reverted(self, cb_state):
-        """True if putting CB101 in ``cb_state`` would breach a limit next tick."""
+        """True if putting CB101 in ``cb_state``(OPEN/CLOSED) would breach a limit next tick."""
         required = self._required_cb_state(self._next_frequency(cb_state))
         return required is not None and required != cb_state
 
     def _enforce_interlock(self, frequency):
+        """Force CB101 to the required state and advance the hysteresis latch.
+
+        The only place ``self._latch`` is written. Safe to do here because
+        ``tick()`` only ever calls this with a real frequency -- the current
+        one, or the one about to be applied -- never a hypothetical probe
+        like `_would_be_reverted` uses. That distinction is what keeps
+        `_required_cb_state` itself pure.
+        """
         required = self._required_cb_state(frequency)
+        self._latch = required
         if required is not None and required != self.cb101:
             self.set_cb101(required, override_interlock=True)
 
     def is_frequency_unsafe(self):
         """The spec-literal check: is the bus outside the safe band right now?
 
-        Always False in normal operation, because the predictive interlock acts
-        a tick earlier. Kept because it is the stated rule, and because it is
-        the recovery trigger for an externally injected unsafe state.
+        Latch-independent by design, unlike `_required_cb_state`. Always False
+        in normal operation, because the predictive interlock acts a tick
+        earlier. Kept because it is the stated rule, and because it is the
+        recovery trigger for an externally injected unsafe state.
         """
-        return self._required_cb_state(self.frequency) is not None
+        return self._hard_limit_state(self.frequency) is not None
 
     def is_cb101_locked(self):
         """Whether the UI should disable the CB101 button.

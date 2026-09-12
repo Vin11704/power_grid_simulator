@@ -50,7 +50,7 @@ def test_initial_state():
     sim = PowerGridSimulator()
     assert sim.t == 0
     assert sim.frequency == 50.00
-    assert sim.g101 == OFF
+    assert sim.g101 == ON
     assert sim.cb101 == CLOSED
     assert sim.running is False
 
@@ -59,17 +59,17 @@ def test_reset_records_the_t0_row():
     """Without this row the chart starts at 49.85 and hides the 50.00 start."""
     sim = PowerGridSimulator()
     assert sim.history == [
-        {"t": 0, "frequency": 50.00, "g101": OFF, "cb101": CLOSED}
+        {"t": 0, "frequency": 50.00, "g101": ON, "cb101": CLOSED}
     ]
 
 
 def test_reset_after_ticks_restores_initial_state():
     sim = running_sim()
-    sim.set_g101(True)
+    sim.set_g101(False)
     run_ticks(sim, 20)
     sim.reset()
 
-    assert (sim.t, sim.frequency, sim.g101, sim.cb101) == (0, 50.00, OFF, CLOSED)
+    assert (sim.t, sim.frequency, sim.g101, sim.cb101) == (0, 50.00, ON, CLOSED)
     assert sim.running is False
     assert len(sim.history) == 1
 
@@ -115,7 +115,7 @@ def test_rate_table_applied_by_tick(g101, cb101, expected):
 # --------------------------------------------------------------------------
 
 def test_cb101_does_not_flip_before_a_predicted_breach():
-    sim = running_sim()
+    sim = running_sim(g101=OFF)
     for expected in (49.85, 49.70, 49.55):
         sim.tick()
         assert sim.frequency == expected
@@ -129,7 +129,7 @@ def test_flip_happens_one_tick_early_and_applies_the_new_rate():
     and the (OFF, OPEN) rate of 0.00 is applied instead. Frequency must stay
     at 49.55 -- if it moved, the stale rate was used.
     """
-    sim = running_sim()
+    sim = running_sim(g101=OFF)
     run_ticks(sim, 3)
     assert (sim.frequency, sim.cb101) == (49.55, CLOSED)
 
@@ -139,7 +139,7 @@ def test_flip_happens_one_tick_early_and_applies_the_new_rate():
 
 
 def test_golden_trace_with_g101_off():
-    sim = running_sim()
+    sim = running_sim(g101=OFF)
     assert run_ticks(sim, 6) == [49.85, 49.70, 49.55, 49.55, 49.55, 49.55]
     assert [row["cb101"] for row in sim.history] == [
         CLOSED, CLOSED, CLOSED, CLOSED, OPEN, OPEN, OPEN
@@ -148,10 +148,59 @@ def test_golden_trace_with_g101_off():
 
 def test_under_frequency_latch_is_stable():
     """With no generation the frequency is held, not driven below the limit."""
-    sim = running_sim()
+    sim = running_sim(g101=OFF)
     run_ticks(sim, 4)
     assert set(run_ticks(sim, 50)) == {49.55}
     assert sim.cb101 == OPEN
+
+
+def test_cb101_stays_locked_through_mid_band_until_nominal_recovery():
+    """The point of the hysteresis latch: once the under-frequency interlock
+    trips, CB101 must stay forced OPEN -- and the button/setter locked --
+    through the whole recovery, releasing only once frequency is back at
+    NOMINAL_FREQ. The old predicate would have released this as soon as
+    frequency was back inside the 49.50-50.50 band, e.g. at 49.79 Hz.
+    """
+    sim = running_sim(g101=OFF)
+    run_ticks(sim, 4)
+    assert (sim.frequency, sim.cb101) == (49.55, OPEN)
+
+    sim.set_g101(True)                       # (ON, OPEN) = +0.12/s: now it can recover
+    saw_mid_band_while_locked = False
+    while sim.frequency < 50.00:
+        assert sim.is_cb101_locked() is True
+        assert sim.set_cb101(CLOSED) is False
+        assert sim.cb101 == OPEN             # rejected command must not mutate state
+        if UNDER_FREQ < sim.frequency < 50.00:
+            saw_mid_band_while_locked = True
+        sim.tick()
+
+    assert saw_mid_band_while_locked          # proves this test exercised the mid-band case
+    assert sim.frequency >= 50.00
+    assert sim.is_cb101_locked() is False
+    assert sim.set_cb101(CLOSED) is True
+
+
+def test_cb101_stays_locked_through_mid_band_until_nominal_recovery_over_freq():
+    """Symmetric case: an over-frequency trip must stay forced CLOSED through
+    the whole decline, releasing only once frequency is back at NOMINAL_FREQ."""
+    sim = running_sim(frequency=50.55, g101=ON, cb101=OPEN)
+    sim.tick()
+    assert (sim.frequency, sim.cb101) == (50.50, CLOSED)
+
+    saw_mid_band_while_locked = False        # (ON, CLOSED) = -0.05/s
+    while sim.frequency > 50.00:
+        assert sim.is_cb101_locked() is True
+        assert sim.set_cb101(OPEN) is False
+        assert sim.cb101 == CLOSED
+        if 50.00 < sim.frequency < OVER_FREQ:
+            saw_mid_band_while_locked = True
+        sim.tick()
+
+    assert saw_mid_band_while_locked
+    assert sim.frequency <= 50.00
+    assert sim.is_cb101_locked() is False
+    assert sim.set_cb101(OPEN) is True
 
 
 def test_steady_state_cycle_with_g101_on():
@@ -192,7 +241,7 @@ def test_frequency_never_reaches_the_limits(g101, cb101):
 # --------------------------------------------------------------------------
 
 def test_set_g101_is_never_blocked():
-    sim = running_sim()
+    sim = running_sim(g101=OFF)
     run_ticks(sim, 4)                        # sit at the under-frequency latch
     assert sim.is_cb101_locked() is True
 
@@ -204,7 +253,7 @@ def test_set_g101_is_never_blocked():
 
 def test_set_cb101_rejected_when_it_would_be_reverted():
     """The setter, not just the greyed-out button, must enforce the interlock."""
-    sim = running_sim()
+    sim = running_sim(g101=OFF)
     run_ticks(sim, 4)
     assert (sim.frequency, sim.cb101) == (49.55, OPEN)
 
@@ -227,7 +276,7 @@ def test_set_cb101_allowed_while_paused():
 
 
 def test_interlock_override_beats_a_refused_command():
-    sim = running_sim()
+    sim = running_sim(g101=OFF)
     run_ticks(sim, 4)
     assert sim.set_cb101(CLOSED) is False
     assert sim.set_cb101(CLOSED, override_interlock=True) is True
@@ -253,7 +302,7 @@ def test_is_frequency_unsafe_is_false_in_normal_operation():
 # --------------------------------------------------------------------------
 
 def test_auto_interlock_reuses_set_cb101(monkeypatch):
-    sim = running_sim()
+    sim = running_sim(g101=OFF)
     calls = []
     original = sim.set_cb101
 
@@ -361,7 +410,7 @@ def test_reactive_branch_opens_cb101_for_an_injected_under_frequency():
 def test_interlock_cannot_recover_under_frequency_without_generation():
     """Documents a real limitation: (OFF, OPEN) is 0.00 Hz/s, so the interlock
     can halt an under-frequency decay but not reverse it."""
-    sim = running_sim(frequency=49.45)
+    sim = running_sim(frequency=49.45, g101=OFF)
     run_ticks(sim, 20)
     assert (sim.frequency, sim.cb101) == (49.45, OPEN)
 

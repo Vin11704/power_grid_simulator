@@ -22,6 +22,7 @@ import streamlit as st
 from power_grid_simulator.simulator import (
     CLOSED,
     DEFAULT_DURATION,
+    NOMINAL_FREQ,
     OFF,
     ON,
     OPEN,
@@ -37,6 +38,7 @@ G101_KEY = "g101_toggle"
 MAX_DURATION = 3600
 
 LIMIT_COLOUR = "#d62728"
+NOMINAL_COLOUR = "#2ca02c"
 
 st.set_page_config(page_title="Power Grid Simulator", layout="wide")
 
@@ -49,6 +51,9 @@ def get_simulator():
     if "sim" not in st.session_state:
         st.session_state.sim = PowerGridSimulator()
         st.session_state.last_tick = 0.0
+        # Seed the keyed toggle so it agrees with the model on first render --
+        # otherwise st.toggle defaults to False while sim.g101 starts ON.
+        st.session_state[G101_KEY] = st.session_state.sim.g101 == ON
     return st.session_state.sim
 
 
@@ -64,13 +69,16 @@ def on_start():
 
 def on_pause():
     st.session_state.sim.stop()
+    st.info("Paused. Click Start to resume.")
 
 
 def on_reset():
     st.session_state.sim.reset()
     st.session_state.last_tick = time.monotonic()
-    # Only legal inside a callback: widgets are not instantiated yet.
-    st.session_state[G101_KEY] = False
+    # Only legal inside a callback: widgets are not instantiated yet. Synced
+    # from the sim rather than hardcoded, so it can't drift from reset()'s
+    # actual default.
+    st.session_state[G101_KEY] = st.session_state.sim.g101 == ON
 
 
 def on_g101_change():
@@ -94,7 +102,7 @@ def on_cb101_click():
 # --------------------------------------------------------------------------
 
 def frequency_chart(history):
-    """Bus frequency with the two safety limits as dotted reference lines."""
+    """Bus frequency, the two safety limits, and the nominal recovery target."""
     limits = pd.DataFrame(
         {
             "limit": [UNDER_FREQ, OVER_FREQ],
@@ -103,6 +111,9 @@ def frequency_chart(history):
                 f"Over-frequency limit {OVER_FREQ:.2f} Hz",
             ],
         }
+    )
+    nominal = pd.DataFrame(
+        {"limit": [NOMINAL_FREQ], "label": [f"Nominal {NOMINAL_FREQ:.2f} Hz — interlock release"]}
     )
 
     trace = alt.Chart(history).mark_line(point=True).encode(
@@ -124,8 +135,15 @@ def frequency_chart(history):
         align="left", baseline="bottom", dx=4, dy=-3, fontSize=11,
         color=LIMIT_COLOUR,
     ).encode(x=alt.value(5), y=alt.Y("limit:Q"), text="label:N")
+    nominal_rule = alt.Chart(nominal).mark_rule(
+        strokeDash=[2, 3], color=NOMINAL_COLOUR, size=1.5,
+    ).encode(y="limit:Q")
+    nominal_label = alt.Chart(nominal).mark_text(
+        align="left", baseline="bottom", dx=4, dy=-3, fontSize=11,
+        color=NOMINAL_COLOUR,
+    ).encode(x=alt.value(5), y=alt.Y("limit:Q"), text="label:N")
 
-    return alt.layer(rules, labels, trace).properties(
+    return alt.layer(rules, labels, nominal_rule, nominal_label, trace).properties(
         height=300, title="Bus frequency (FS101)"
     )
 
@@ -155,13 +173,15 @@ def state_chart(history, column, title, high_label, low_label, colour):
 
 def render_charts(sim):
     history = pd.DataFrame(sim.history)
-    st.altair_chart(
-        alt.vconcat(
-            frequency_chart(history),
-            state_chart(history, "g101", "G101", ON, OFF, "#2ca02c"),
-            state_chart(history, "cb101", "CB101", CLOSED, OPEN, "#1f77b4"),
-        ).resolve_scale(x="shared")
-    )
+    _, col_main, _ = st.columns([1, 10, 1])
+    with col_main:
+        st.altair_chart(
+            alt.vconcat(
+                frequency_chart(history),
+                state_chart(history, "g101", "G101", ON, OFF, "#2ca02c"),
+                state_chart(history, "cb101", "CB101", CLOSED, OPEN, "#1f77b4"),
+            ).resolve_scale(x="shared"), use_container_width=True
+        )
 
 
 # --------------------------------------------------------------------------
@@ -239,7 +259,7 @@ def live_view():
     metric_cols[2].metric("G101", sim.g101)
     metric_cols[3].metric("CB101", sim.cb101)
 
-    control_cols = st.columns([1, 1, 2])
+    control_cols = st.columns([1, 1, 1])
     control_cols[0].toggle(
         "G101 generator",
         key=G101_KEY,
@@ -263,12 +283,16 @@ def live_view():
             )
             control_cols[2].warning(
                 f"**INTERLOCK** — CB101 held OPEN at {sim.frequency:.2f} Hz. "
-                f"Closing it would take the bus below {UNDER_FREQ:.2f} Hz. {recovery}"
+                f"It stays locked open until the bus recovers to "
+                f"{NOMINAL_FREQ:.2f} Hz, even though frequency is already back "
+                f"inside the safe band. {recovery}"
             )
         else:
             control_cols[2].warning(
                 f"**INTERLOCK** — CB101 held CLOSED at {sim.frequency:.2f} Hz. "
-                f"Opening it would take the bus above {OVER_FREQ:.2f} Hz."
+                f"It stays locked closed until the bus falls back to "
+                f"{NOMINAL_FREQ:.2f} Hz, even though frequency is already back "
+                f"inside the safe band."
             )
 
     render_charts(sim)
@@ -278,7 +302,8 @@ live_view()
 
 st.caption(
     "The interlock is *predictive*: CB101 moves on the tick before a limit "
-    "would be crossed, so the bus never reaches 49.50 / 50.50 Hz. As a result "
-    "the breaker button is disabled slightly inside the safe band -- whenever "
-    "the change would be reverted on the next tick."
+    "would be crossed, so the bus never reaches 49.50 / 50.50 Hz. Once tripped, "
+    "it also *latches*: the breaker stays forced in its safety position, and "
+    "the button stays disabled, for the whole recovery -- releasing only once "
+    "the bus is back at 50.00 Hz, not just back inside the safe band."
 )
