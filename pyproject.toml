@@ -1,7 +1,7 @@
 [project]
 name = "power-grid-simulator"
 version = "0.1.0"
-description = "Add your description here"
+description = "Power grid simulation displayed in the form of an application with a line graph indicating the changes in frequency of the system"
 readme = "README.md"
 authors = [
     { name = "Vin11704", email = "malvin.ken.s@gmail.com" }

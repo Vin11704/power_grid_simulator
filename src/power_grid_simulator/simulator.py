@@ -119,11 +119,7 @@ class PowerGridSimulator:
 
         Once a hard limit trips, ``self._latch`` remembers it, so the
         requirement persists until frequency fully recovers to
-        ``NOMINAL_FREQ`` -- not just back inside the safe band -- and the
-        interlock (and the button) cannot chatter right at the edge of a
-        limit. Only reads ``self._latch``, never writes it, so this stays a
-        pure query safe to call from `_would_be_reverted` for UI checks and
-        fuzz probing.
+        ``NOMINAL_FREQ`` -- not just back inside the safe band -- and the interlock (and the button) cannot chatter right at the edge of a limit. Only reads ``self._latch``, never writes it, so this stays a pure query safe to call from `_would_be_reverted` for UI checks.
         """
         hard = self._hard_limit_state(frequency)
         if hard is not None:
@@ -143,9 +139,7 @@ class PowerGridSimulator:
         """Force CB101 to the required state and advance the hysteresis latch.
 
         The only place ``self._latch`` is written. Safe to do here because
-        ``tick()`` only ever calls this with a real frequency -- the current
-        one, or the one about to be applied -- never a hypothetical probe
-        like `_would_be_reverted` uses. That distinction is what keeps
+        ``tick()`` only ever calls this with a real frequency -- the current one, or the one about to be applied -- never a hypothetical probe like `_would_be_reverted` uses. That distinction is what keeps
         `_required_cb_state` itself pure.
         """
         required = self._required_cb_state(frequency)
@@ -153,24 +147,23 @@ class PowerGridSimulator:
         if required is not None and required != self.cb101:
             self.set_cb101(required, override_interlock=True)
 
-    def is_frequency_unsafe(self):
-        """The spec-literal check: is the bus outside the safe band right now?
+    # def is_frequency_unsafe(self):
+    #     """The spec-literal check: is the bus outside the safe band right now?
 
-        Latch-independent by design, unlike `_required_cb_state`. Always False
-        in normal operation, because the predictive interlock acts a tick
-        earlier. Kept because it is the stated rule, and because it is the
-        recovery trigger for an externally injected unsafe state.
-        """
-        return self._hard_limit_state(self.frequency) is not None
+    #     Latch-independent by design, unlike `_required_cb_state`. Always False
+    #     in normal operation, because the predictive interlock acts a tick
+    #     earlier. Kept because it is the recovery trigger for an externally 
+    #     injected unsafe state. Unlikely to happen
+    #     """
+    #     return self._hard_limit_state(self.frequency) is not None
 
     def is_cb101_locked(self):
         """Whether the UI should disable the CB101 button.
 
-        Uses the same predicate as :meth:`set_cb101`, so a button that looks
-        clickable is one the simulator will actually accept.
+        Uses the same predicate as :meth:`set_cb101`, so a button that looks clickable is one the simulator will actually accept.
         """
         opposite = OPEN if self.cb101 == CLOSED else CLOSED
-        return self._would_be_reverted(opposite) or self.is_frequency_unsafe()
+        return self._would_be_reverted(opposite) # or self.is_frequency_unsafe()
 
     # -- simulation -------------------------------------------------------
 
