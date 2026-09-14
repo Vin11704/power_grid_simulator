@@ -55,27 +55,98 @@ is and [Design notes](#design-notes) for why it was built this way.
 
 - git
 - uv (package manager)
-    
-    run the following in a terminal if uv is not installed:
-    `powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"`
+- Python 3.14 or newer (uv can install and manage this automatically)
+
+Install `uv` if it is not already available. Respective OS guide below.
+
 
 # Setup (Windows)
 
-### Clone Repository:
-``` powershell
+### Install prerequisites
+
+Install [Git for Windows](https://git-scm.com/download/win) if it is not already
+installed. Then open PowerShell and install `uv`:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Close and reopen PowerShell after installing `uv`, then confirm that it is
+available:
+
+```powershell
+uv --version
+```
+
+### Clone the repository
+
+```powershell
 git clone <repo>
 cd <repo>
 ```
 
-### Create Virtual Environment and Install Dependencies
+### Create the environment and install dependencies
+
+`uv sync` reads `pyproject.toml`, installs Python 3.14 if needed, creates the
+project environment, and installs the application dependencies:
+
 ```powershell
 uv sync
 ```
 
-### Run application
+### Run the application
+
 ```powershell
-uv run streamlit run src/power_grid_simulator/app.py   
+uv run streamlit run src/power_grid_simulator/app.py
 ```
+
+Streamlit will print a local URL, normally `http://localhost:8501`, which you
+can open in a browser.
+
+## Setup (macOS)
+
+### Install prerequisites
+
+Install [Homebrew](https://brew.sh/) if it is not already installed, then run:
+
+```bash
+brew install git
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Close and reopen Terminal after installing `uv`, or load its shell environment if
+the installer tells you to do so. Confirm that it is available:
+
+```bash
+uv --version
+```
+
+### Clone the repository
+
+```bash
+git clone <repo>
+cd <repo>
+```
+
+### Create the environment and install dependencies
+
+`uv sync` reads `pyproject.toml`, installs Python 3.14 if needed, creates the
+project environment, and installs the application dependencies:
+
+```bash
+uv sync
+```
+
+***disclaimer**: MacOS setup not tested, may or may not work as expected. Please report any issues.*
+
+### Run the application
+
+```bash
+uv run streamlit run src/power_grid_simulator/app.py
+```
+
+Streamlit will print a local URL, normally `http://localhost:8501`, which you
+can open in a browser.
 
 
 ## Assumptions
